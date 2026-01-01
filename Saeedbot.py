@@ -1,71 +1,62 @@
-from telegram import Update
-from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, ContextTypes, filters
-import re
-import asyncio
+import telebot
+import requests
+from bs4 import BeautifulSoup
+import threading
 
-BOT_TOKEN = "8493383117:AAG04DYFFrUgXpZjzAQ8urTFTBKiTKRh-0A"  # @BotFather se mila hua token
+# Aapka Token
+BOT_TOKEN = '8524830074:AAGtccQtKZrYVlg9WoYwsNnNK8-7VqjwOdE'
+bot = telebot.TeleBot(BOT_TOKEN)
 
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text(
-        "Mujhe do cheezen bhej sakte ho:\n"
-        "1) Koi file jisme numbers ho (TXT/CSV, har line ya space se alag)\n"
-        "2) Seedha copy-paste text jisme numbers ho.\n\n"
-        "Main in sab numbers ko alag-alag messages me bhejunga."
-    )
+def get_path(user_input):
+    clean = user_input.replace("+", "").replace(" ", "").strip()
+    if "temporary-phone-number.com" in user_input:
+        return user_input.replace("https://temporary-phone-number.com/", "").strip("/")
 
-def extract_numbers_from_text(text: str):
-    # comma / semicolon ko space se replace
-    cleaned = text.replace(',', ' ').replace(';', ' ')
-    parts = re.split(r'\s+', cleaned.strip())
+    # Country logic
+    if clean.startswith("46"): return f"Sweden-Phone-Number/{clean}"
+    if clean.startswith("358"): return f"Finland-Phone-Number/{clean}"
+    if clean.startswith("44"): return f"UK-Phone-Number/{clean}"
+    if clean.startswith("1"): return f"USA-Phone-Number/{clean}"
+    return None
 
-    nums = []
-    for p in parts:
-        if p.isdigit():
-            nums.append(p)
-    return nums
+def fetch_single_sms(chat_id, path):
+    url = f"https://temporary-phone-number.com/{path}"
+    headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
 
-async def handle_file(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    document = update.message.document
-    file = await document.get_file()
-    file_bytes = await file.download_as_bytearray()
+    try:
+        res = requests.get(url, headers=headers, timeout=20)
+        if res.status_code != 200:
+            bot.send_message(chat_id, f"❌ Saeed, Site Error: {res.status_code}")
+            return
 
-    # bytes -> text (jo decode nahi ho payega usko ignore)
-    text = file_bytes.decode(errors="ignore")
+        soup = BeautifulSoup(res.text, 'html.parser')
 
-    numbers = extract_numbers_from_text(text)
+        # Latest SMS nikalne ki koshish
+        msg_found = soup.find('div', class_='message_messages_details')
+        if not msg_found:
+            msg_found = soup.select_one('.direct-chat-text')
 
-    if not numbers:
-        await update.message.reply_text("File me koi valid number nahi mila (pure digits).")
-        return
+        if msg_found:
+            txt = msg_found.get_text().strip()
+            bot.send_message(chat_id, f"✅ **Saeed, Latest SMS Mil Gaya:**\n\n`{txt}`", parse_mode="Markdown")
+        else:
+            bot.send_message(chat_id, "⚠️ Saeed, page khul gaya par koi SMS nahi mila.")
 
-    await update.message.reply_text(f"File me {len(numbers)} numbers mile. Ab bhej raha hoon...")
+    except Exception as e:
+        bot.send_message(chat_id, f"⚠️ Error: {str(e)}")
 
-    for n in numbers:
-        await update.message.reply_text(str(n))
-        await asyncio.sleep(0.1)  # halka delay taake flood na ho
+    # Yahan worker khud khatam ho jayega (No while loop)
+    bot.send_message(chat_id, "⏹️ Tracking complete. Ab agla number bhejien.")
 
-async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    text = update.message.text
-    numbers = extract_numbers_from_text(text)
+@bot.message_handler(func=lambda m: True)
+def handle(message):
+    path = get_path(message.text)
+    if path:
+        bot.reply_to(message, f"🔎 Saeed, checking latest message for: {path}...")
+        # Thread isliye taaki bot hang na ho agar site slow ho
+        threading.Thread(target=fetch_single_sms, args=(message.chat.id, path), daemon=True).start()
+    else:
+        bot.reply_to(message, "Saeed, ye number ya country sahi nahi hai.")
 
-    if not numbers:
-        await update.message.reply_text("Text me koi valid number nahi mila (sirf 0-9 wale digits hone chahiye).")
-        return
-
-    await update.message.reply_text(f"Text me {len(numbers)} numbers mile. Ab bhej raha hoon...")
-
-    for n in numbers:
-        await update.message.reply_text(str(n))
-        await asyncio.sleep(0.1)
-
-def main():
-    app = ApplicationBuilder().token(BOT_TOKEN).build()
-
-    app.add_handler(CommandHandler("start", start))
-    app.add_handler(MessageHandler(filters.Document.ALL, handle_file))
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
-
-    app.run_polling()
-
-if __name__ == "__main__":
-    main()
+print("Bot is running (One-Shot Mode)...")
+bot.infinity_polling()
