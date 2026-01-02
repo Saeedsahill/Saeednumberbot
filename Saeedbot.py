@@ -1,5 +1,6 @@
 import telebot
-import requests
+import cloudscraper
+import random
 from bs4 import BeautifulSoup
 import threading
 
@@ -7,12 +8,19 @@ import threading
 BOT_TOKEN = '8524830074:AAGtccQtKZrYVlg9WoYwsNnNK8-7VqjwOdE'
 bot = telebot.TeleBot(BOT_TOKEN)
 
+# Kuch working free proxy list (Aap aur bhi add kar sakte hain)
+PROXY_LIST = [
+    "http://50.222.245.47:80",
+    "http://20.219.180.149:80",
+    "http://162.223.90.130:80",
+    "http://198.199.86.11:80",
+]
+
 def get_path(user_input):
     clean = user_input.replace("+", "").replace(" ", "").strip()
     if "temporary-phone-number.com" in user_input:
         return user_input.replace("https://temporary-phone-number.com/", "").strip("/")
 
-    # Country logic
     if clean.startswith("46"): return f"Sweden-Phone-Number/{clean}"
     if clean.startswith("358"): return f"Finland-Phone-Number/{clean}"
     if clean.startswith("44"): return f"UK-Phone-Number/{clean}"
@@ -22,54 +30,62 @@ def get_path(user_input):
 def fetch_single_sms(chat_id, path):
     url = f"https://temporary-phone-number.com/{path}"
     
-    # Better Headers to bypass 403
-    headers = {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8',
-        'Accept-Language': 'en-US,en;q=0.9',
-        'Referer': 'https://temporary-phone-number.com/',
-        'Connection': 'keep-alive',
-        'Upgrade-Insecure-Requests': '1'
-    }
+    # Random proxy select karna
+    proxy = random.choice(PROXY_LIST)
+    proxies = {"http": proxy, "https": proxy}
 
     try:
-        # Session use karne se cookies handle hoti hain, 403 ke chances kam hote hain
-        session = requests.Session()
-        res = session.get(url, headers=headers, timeout=25)
+        # Cloudscraper browser emulation ke saath
+        scraper = cloudscraper.create_scraper(
+            browser={
+                'browser': 'chrome',
+                'platform': 'windows',
+                'desktop': True
+            }
+        )
         
-        if res.status_code != 200:
-            bot.send_message(chat_id, f"❌ Saeed, Site Error: {res.status_code}\n(Site ne Render ko block kiya hai)")
+        # Request with Proxy and Headers
+        res = scraper.get(url, proxies=proxies, timeout=30)
+        
+        if res.status_code == 403:
+            bot.send_message(chat_id, "❌ **Saeed, 403 Forbidden:** Proxy ne bhi kaam nahi kiya. Site ne data center block kiya hua hai.")
             return
-
+        
         soup = BeautifulSoup(res.text, 'html.parser')
 
-        # Latest SMS nikalne ki koshish (Updated selectors)
+        # SMS nikalne ka logic
         msg_found = soup.find('div', class_='message_messages_details')
         if not msg_found:
             msg_found = soup.select_one('.direct-chat-text')
+        
         if not msg_found:
-            # Teesra option agar layout change ho
-            msg_found = soup.find('td', {'data-label': 'Message'})
+            # Table logic as fallback
+            rows = soup.find_all('tr')
+            for row in rows:
+                if "ago" in row.text.lower():
+                    msg_found = row
+                    break
 
         if msg_found:
             txt = msg_found.get_text().strip()
-            bot.send_message(chat_id, f"✅ **Saeed, Latest SMS Mil Gaya:**\n\n`{txt}`", parse_mode="Markdown")
+            clean_txt = "\n".join([line.strip() for line in txt.splitlines() if line.strip()])
+            bot.send_message(chat_id, f"✅ **Saeed, Latest SMS Found:**\n\n`{clean_txt}`", parse_mode="Markdown")
         else:
-            bot.send_message(chat_id, "⚠️ Saeed, page khul gaya par koi SMS nahi mila. Shayad inbox khali hai.")
+            bot.send_message(chat_id, "⚠️ Saeed, Page open hua par SMS nahi mila.")
 
     except Exception as e:
-        bot.send_message(chat_id, f"⚠️ Error: {str(e)}")
+        bot.send_message(chat_id, f"⚠️ Error: Proxy slow hai ya connection fail ho gaya. Dobara try karein.\n`{str(e)}`")
 
-    bot.send_message(chat_id, "⏹️ Tracking complete. Ab agla number bhejien.")
+    bot.send_message(chat_id, "⏹️ Process Finished.")
 
 @bot.message_handler(func=lambda m: True)
 def handle(message):
     path = get_path(message.text)
     if path:
-        bot.reply_to(message, f"🔎 Saeed, checking latest message for: {path}...")
+        bot.reply_to(message, f"🔎 Saeed, Proxy ke zariye bypass kar raha hoon: {path}...")
         threading.Thread(target=fetch_single_sms, args=(message.chat.id, path), daemon=True).start()
     else:
-        bot.reply_to(message, "Saeed, ye number ya country sahi nahi hai.")
+        bot.reply_to(message, "Saeed, ye number format theek nahi hai.")
 
-print("Bot is running...")
+print("Bot is running with Proxy & Cloudscraper...")
 bot.infinity_polling()
